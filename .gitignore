@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+*.egg-info/
+
+# Unit test / coverage reports
+.pytest_cache/
+
+# Environments
+.env
+.venv
+venv/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+EasyTeleop.db
