@@ -1,28 +1,45 @@
-from fastapi import FastAPI, WebSocket, HTTPException, Query, Body
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-import sqlite3
-import json
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from typing import List, Optional
 import asyncio
-import websockets
-from websockets.server import WebSocketServerProtocol
-import time
+import json
 import logging
+import sqlite3
+import time
+
+from database import DB_PATH, get_node_devices, get_node_teleop_groups, init_tables
+from rpc import (
+    handle_jsonrpc_request,
+    handle_jsonrpc_response,
+    node_websockets,
+    notify_node_config_update,
+    notify_node_start_teleop_group,
+    notify_node_stop_teleop_group,
+    wait_for_response,
+)
+from schemas import (
+    DeviceCreate,
+    DeviceResponse,
+    DeviceTestRequest,
+    DeviceUpdate,
+    NodeRegisterRequest,
+    NodeRegisterResponse,
+    NodeResponse,
+    TeleopGroupCreate,
+    TeleopGroupResponse,
+    TeleopGroupUpdate,
+    VRCreate,
+    VRResponse,
+    VRUpdate,
+)
 
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
-# 数据库路径
-DB_PATH = "EasyTeleop.db"
-
-# WebSocket连接池
-node_websockets: Dict[int, WebSocketServerProtocol] = {}
 
 app = FastAPI()
 
@@ -34,247 +51,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 初始化数据库表
-def init_tables(db_path):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
-    # 创建 nodes 表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS nodes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid VARCHAR(36) UNIQUE NOT NULL,
-            status BOOLEAN DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # 创建VR表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS vrs(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid VARCHAR(36) UNIQUE NOT NULL,
-            device_id INTEGER,
-            info TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (device_id) REFERENCES devices(id)
-        )
-    ''')
-    
-    # 创建 devices 表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS devices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id INTEGER NOT NULL,
-            name VARCHAR(20) NOT NULL,
-            description TEXT,
-            category VARCHAR(20) NOT NULL,
-            type VARCHAR(20) NOT NULL,
-            config TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status INTEGER DEFAULT 0,
-            FOREIGN KEY (node_id) REFERENCES nodes (id)
-        )
-    ''')
-    
-    # 创建 teleop_groups 表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS teleop_groups (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id INTEGER NOT NULL,
-            name VARCHAR(20) NOT NULL,
-            description TEXT,
-            type VARCHAR(20) NOT NULL,
-            config TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status BOOLEAN DEFAULT 0,
-            capture_status BOOLEAN DEFAULT 0,
-            FOREIGN KEY (node_id) REFERENCES nodes (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-
-# Pydantic模型
-class NodeRegisterRequest(BaseModel):
-    uuid: str
-
-class NodeRegisterResponse(BaseModel):
-    id: int
-    devices: List[Dict[str, Any]] = []
-    teleop_groups: List[Dict[str, Any]] = []
-
-class NodeResponse(BaseModel):
-    id: int
-    uuid: str
-    status: bool
-    created_at: str
-    updated_at: str
-
-class DeviceBase(BaseModel):
-    name: str
-    description: str
-    category: str
-    type: str
-    config: Dict[str, Any]
-
-class DeviceCreate(DeviceBase):
-    node_id: int
-
-class DeviceUpdate(DeviceBase):
-    name: str
-    description: str
-    category: str
-    type: str
-    config: Dict[str, Any]
-
-class DeviceInDB(DeviceBase):
-    id: int
-    node_id: int
-    name: str
-    description: str
-    category: str
-    type: str
-    config: Dict[str, Any]
-    status: int
-    created_at: str
-    updated_at: str
-
-class DeviceResponse(BaseModel):
-    id: int
-    node_id: int
-    name: str
-    description: str
-    category: str
-    type: str
-    config: Dict[str, Any]
-    status: int
-    created_at: str
-    updated_at: str
-
-class TeleopGroupBase(BaseModel):
-    name: str
-    description: str
-    type: str
-    config: List[int]
-
-class TeleopGroupCreate(TeleopGroupBase):
-    node_id: int
-
-class TeleopGroupUpdate(TeleopGroupBase):
-    pass
-
-class TeleopGroupInDB(TeleopGroupBase):
-    id: int
-    node_id: int
-    status: int
-    capture_status: int
-    created_at: str
-    updated_at: str
-
-class TeleopGroupResponse(BaseModel):
-    id: int
-    node_id: int
-    name: str
-    description: str
-    type: str
-    config: List[int]
-    status: int
-    capture_status: int
-    created_at: str
-    updated_at: str
-
-class DeviceTestRequest(DeviceBase):
-    """
-    设备测试请求模型
-    """
-    node_id: int = Field(..., description="节点ID")
-
-# VR相关模型
-class VRBase(BaseModel):
-    uuid: str
-    info: Optional[Dict[str, Any]] = None
-
-class VRCreate(VRBase):
-    pass
-
-class VRUpdate(BaseModel):
-    uuid: Optional[str] = None
-    device_id: Optional[int] = None
-    info: Optional[Dict[str, Any]] = None
-
-class VRResponse(VRBase):
-    id: int
-    device_id: Optional[int] = None
-    info: Optional[Dict[str, Any]] = None
-    created_at: str
-    updated_at: str
-
-# 存储等待响应的Future对象，key为websocket对象id和rpc_id的组合
-pending_responses: Dict[str, asyncio.Future] = {}
-
-# 添加等待响应的辅助函数
-async def wait_for_response(websocket: WebSocketServerProtocol, rpc_id: int, timeout: float = 30.0) -> Any:
-    """等待并返回RPC响应结果"""
-    # 创建一个Future对象来等待响应
-    future = asyncio.Future()
-    
-    # 生成唯一的键值
-    key = f"{id(websocket)}_{rpc_id}"
-    
-    # 将Future对象存储到pending_responses字典中
-    pending_responses[key] = future
-    
-    try:
-        # 等待响应或超时
-        response = await asyncio.wait_for(future, timeout=timeout)
-        
-        # 处理响应，使用更安全的方法避免"string indices must be integers"错误
-        if isinstance(response, dict) and 'error' in response:
-            error_info = response['error']
-            if isinstance(error_info, dict):
-                code = error_info.get('code', 'Unknown')
-                message = error_info.get('message', 'Unknown error')
-                raise Exception(f"RPC Error {code}: {message}")
-            else:
-                raise Exception(f"RPC Error: {error_info}")
-        
-        # 安全地返回结果
-        if isinstance(response, dict):
-            return response.get('result')
-        else:
-            # 如果响应不是字典，可能需要进一步处理
-            return None
-    except Exception as e:
-        # 确保任何异常都被正确处理
-        raise e
-    finally:
-        # 从pending_responses字典中移除Future对象
-        if key in pending_responses:
-            del pending_responses[key]
-
-async def handle_jsonrpc_response(message: dict, node_id: int = None):
-    """处理JSON-RPC响应"""
-    # 处理Node对Backend请求的响应
-    print(f"收到Node {node_id} 的响应: {message}")
-    
-    # 检查是否有人在等待这个响应
-    if isinstance(message, dict) and 'id' in message:
-        rpc_id = message['id']
-        # 遍历所有WebSocket连接查找匹配的等待请求
-        for node_id_key, websocket in node_websockets.items():
-            key = f"{id(websocket)}_{rpc_id}"
-            if key in pending_responses:
-                future = pending_responses[key]
-                if not future.done():
-                    future.set_result(message)
-                break
 
 # 节点相关API路由
 @app.post("/api/node", response_model=NodeRegisterResponse, status_code=201)
@@ -312,68 +88,6 @@ async def register_node(request: NodeRegisterRequest):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
-def get_node_devices(node_id: int) -> List[Dict[str, Any]]:
-    """获取节点设备配置"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        "SELECT id, name, description, category, type, config FROM devices WHERE node_id = ?",
-        (node_id,)
-    )
-    
-    devices = []
-    for row in cursor.fetchall():
-        try:
-            config_data = json.loads(row[5]) if isinstance(row[5], str) else row[5]
-        except:
-            config_data = {}
-            
-        devices.append({
-            "id": row[0],
-            "name": row[1],
-            "description": row[2],
-            "category": row[3],
-            "type": row[4],
-            "config": config_data
-        })
-        
-    conn.close()
-    return devices
-
-def get_node_teleop_groups(node_id: int) -> List[Dict[str, Any]]:
-    """获取节点遥操组配置"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        "SELECT id, node_id, name, description, type, config FROM teleop_groups WHERE node_id = ?",
-        (node_id,)
-    )
-    
-    teleop_groups = []
-    for row in cursor.fetchall():
-        try:
-            config_data = json.loads(row[5]) if isinstance(row[5], str) else row[5]
-            # 确保config是列表类型
-            if not isinstance(config_data, list):
-                config_data = []
-        except:
-            config_data = []
-            
-        teleop_groups.append({
-            "id": row[0],
-            "node_id": row[1],
-            "name": row[2],
-            "description": row[3],
-            "type": row[4],
-            "config": config_data
-        })
-        
-    conn.close()
-    return teleop_groups
-
 @app.get("/api/nodes", response_model=List[NodeResponse])
 async def get_nodes(uuid: Optional[str] = None):
     """获取节点列表"""
@@ -451,7 +165,7 @@ async def get_device_categories(node_id: int = Query(...)):
         print("发送成功")
         
         # 等待并处理响应
-        device_types_info = await wait_for_response(websocket, rpc_id)
+        device_types_info = await wait_for_response(websocket, node_id, rpc_id)
         print(device_types_info)
         categories = list(device_types_info.keys())
         return categories
@@ -480,7 +194,7 @@ async def get_device_types_info(node_id: int = Query(...)):
         await websocket.send_text(json.dumps(rpc_request))
         
         # 等待并处理响应
-        device_types_info = await wait_for_response(websocket, rpc_id)
+        device_types_info = await wait_for_response(websocket, node_id, rpc_id)
         return device_types_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -590,7 +304,7 @@ async def create_device(device: DeviceCreate):
     #     await websocket.send_text(json.dumps(rpc_request))
         
     #     # 等待并处理响应
-    #     test_result = await wait_for_response(websocket, rpc_id)
+    #     test_result = await wait_for_response(websocket, node_id, rpc_id)
         
     #     # 检查测试结果，确保test_result是字典类型
     #     if not isinstance(test_result, dict) or test_result.get("success") is not True:
@@ -672,7 +386,7 @@ async def update_device(device_id: int, device: DeviceUpdate):
         #     await websocket.send_text(json.dumps(rpc_request))
             
         #     # 等待并处理响应
-        #     test_result = await wait_for_response(websocket, rpc_id)
+        #     test_result = await wait_for_response(websocket, node_id, rpc_id)
             
         #     # 检查测试结果，确保test_result是字典类型
         #     if not isinstance(test_result, dict) or test_result.get("success") is not True:
@@ -783,7 +497,7 @@ async def test_device_connection(device_test_request: DeviceTestRequest):
         await websocket.send_text(json.dumps(rpc_request))
         
         # 等待并处理响应
-        test_result = await wait_for_response(websocket, rpc_id)
+        test_result = await wait_for_response(websocket, node_id, rpc_id)
         
         # 检查测试结果，确保test_result是字典类型
         if not isinstance(test_result, dict) or test_result.get("success") is not True:
@@ -819,7 +533,7 @@ async def get_teleop_group_types_info(node_id: int = Query(...)):
         await websocket.send_text(json.dumps(rpc_request))
         
         # 等待并处理响应
-        teleop_group_types_info = await wait_for_response(websocket, rpc_id)
+        teleop_group_types_info = await wait_for_response(websocket, node_id, rpc_id)
         return teleop_group_types_info
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1040,7 +754,7 @@ async def start_teleop_group(id: int):
         await websocket.send_text(json.dumps(rpc_request))
         
         # 等待并处理响应
-        result = await wait_for_response(websocket, rpc_id)
+        result = await wait_for_response(websocket, node_id, rpc_id)
         
         # 检查结果，确保result是字典类型
         if not isinstance(result, dict) or result.get("success") is not True:
@@ -1099,7 +813,7 @@ async def stop_teleop_group(id: int):
         await websocket.send_text(json.dumps(rpc_request))
         
         # 等待并处理响应
-        result = await wait_for_response(websocket, rpc_id)
+        result = await wait_for_response(websocket, node_id, rpc_id)
         
         # 检查结果，确保result是字典类型
         if not isinstance(result, dict) or result.get("success") is not True:
@@ -1293,66 +1007,6 @@ async def delete_vr(id: int):
     finally:
         conn.close()
 
-# 通知相关函数
-async def notify_node_config_update(node_id: int):
-    """通知Node更新配置"""
-    if node_id in node_websockets:
-        websocket = node_websockets[node_id]
-        
-        # 创建配置更新通知
-        notification = {
-            "jsonrpc": "2.0",
-            "method": "node.update_config",
-            "params": {}
-        }
-        
-        try:
-            await websocket.send_text(json.dumps(notification))
-        except Exception as e:
-            print(f"通知Node {node_id} 更新配置失败: {e}")
-
-async def notify_node_start_teleop_group(node_id: int, id: int):
-    """通知Node启动遥操组"""
-    if node_id in node_websockets:
-        websocket = node_websockets[node_id]
-        
-        # 创建启动遥操组通知
-        notification = {
-            "jsonrpc": "2.0",
-            "method": "node.start_teleop_group",
-            "params": {
-                "id": id
-            }
-        }
-        
-        try:
-            # 发送通知
-            if websocket.state.name != 'CLOSED':
-                await websocket.send_text(json.dumps(notification))
-        except Exception as e:
-            print(f"通知Node {node_id} 启动遥操组 {id} 失败: {e}")
-
-async def notify_node_stop_teleop_group(node_id: int, id: int):
-    """通知Node停止遥操组"""
-    if node_id in node_websockets:
-        websocket = node_websockets[node_id]
-        
-        # 创建停止遥操组通知
-        notification = {
-            "jsonrpc": "2.0",
-            "method": "node.stop_teleop_group",
-            "params": {
-                "id": id
-            }
-        }
-        
-        try:
-            # 发送通知
-            if websocket.state.name != 'CLOSED':
-                await websocket.send_text(json.dumps(notification))
-        except Exception as e:
-            print(f"通知Node {node_id} 停止遥操组 {id} 失败: {e}")
-
 # WebSocket端点
 @app.websocket("/ws/rpc")
 async def websocket_endpoint(websocket: WebSocket):
@@ -1386,92 +1040,6 @@ async def websocket_endpoint(websocket: WebSocket):
             del node_websockets[connection_context["node_id"]]
             print(f"Node {connection_context['node_id']} disconnected and removed from connection pool")
 
-async def handle_jsonrpc_request(request: dict, websocket: WebSocket, connection_context: dict) -> dict:
-    """处理JSON-RPC请求"""
-    rpc_id = request.get("id")
-    method = request.get("method")
-    params = request.get("params", {})
-    
-    response = {
-        "jsonrpc": "2.0",
-        "id": rpc_id
-    }
-    
-    try:
-        # 处理Node提供的方法（node.开头的方法由Node实现，Backend调用）
-        if method == "backend.register":
-            # Node向Backend注册
-            result = await handle_node_register(params, websocket)
-            response["result"] = result
-            # 更新node_id
-            if isinstance(result, dict) and "id" in result:
-                connection_context["node_id"] = result["id"]
-                # 保存WebSocket连接
-                if connection_context["node_id"]:
-                    node_websockets[connection_context["node_id"]] = websocket
-        else:
-            response["error"] = {
-                "code": -32601,
-                "message": "Method not found"
-            }
-    except Exception as e:
-        response["error"] = {
-            "code": -32603,
-            "message": str(e)
-        }
-    
-    return response
-
-async def handle_node_register(params: dict, websocket: WebSocket) -> dict:
-    """处理Node注册"""
-    node_uuid = params.get("uuid")
-    
-    if not node_uuid:
-        raise Exception("Missing uuid parameter")
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # 检查节点是否已存在
-        cursor.execute("SELECT id FROM nodes WHERE uuid = ?", (node_uuid,))
-        result = cursor.fetchone()
-        
-        if result:
-            node_id = result[0]
-        else:
-            # 创建新节点
-            cursor.execute("INSERT INTO nodes (uuid) VALUES (?)", (node_uuid,))
-            node_id = cursor.lastrowid
-            
-        conn.commit()
-        
-        # 保存WebSocket连接
-        node_websockets[node_id] = websocket
-        
-        return {"id": node_id}
-        
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
-
-async def handle_node_test_device(params: dict) -> int:
-    """处理Node设备测试请求"""
-    category = params.get("category")
-    type_name = params.get("type")
-    config = params.get("config")
-    
-    # 这里应该根据设备类型进行实际测试
-    # 目前简化处理，直接返回测试成功
-    print(f"Testing device: {category}.{type_name} with config {config}")
-    
-    # 模拟测试过程需要几秒钟
-    await asyncio.sleep(3)
-    
-    return 1  # 测试成功
-
 # 挂载静态文件夹
 app.mount("/", StaticFiles(directory="static"), name="static")
 @app.get("/", include_in_schema=False)
@@ -1484,7 +1052,7 @@ async def startup_event():
     from MQTTStatusSync import MQTTStatusSync
     sync_service = MQTTStatusSync(
         db_path="EasyTeleop.db",
-        mqtt_broker="121.43.162.224",  # 修改为实际的MQTT服务器地址
+        mqtt_broker="localhost",  # 修改为实际的MQTT服务器地址
         mqtt_port=1883
     )
     
