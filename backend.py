@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import asyncio
 import json
 import logging
@@ -17,6 +17,7 @@ from rpc import (
     notify_node_config_update,
     notify_node_start_teleop_group,
     notify_node_stop_teleop_group,
+    call_node_rpc,
     wait_for_response,
 )
 from schemas import (
@@ -33,6 +34,8 @@ from schemas import (
     VRCreate,
     VRResponse,
     VRUpdate,
+    RPCCallResponse,
+    NodeRPCCallRequest,
 )
 
 # 配置日志
@@ -114,6 +117,35 @@ async def get_nodes(uuid: Optional[str] = None):
         
     conn.close()
     return nodes
+
+
+@app.get("/api/nodes/{node_id}/rpc")
+async def get_node_rpc_methods(node_id: int) -> Dict[str, Any]:
+    """获取指定节点暴露的RPC方法列表和参数信息"""
+    if node_id not in node_websockets:
+        raise HTTPException(status_code=404, detail="Node not connected")
+
+    try:
+        methods = await call_node_rpc(node_id, "node.get_rpc_methods", {})
+        if not (isinstance(methods, dict) and "methods" in methods):
+            raise HTTPException(status_code=500, detail="Invalid method list from node")
+        return {"methods": methods.get("methods")}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/nodes/{node_id}/rpc", response_model=RPCCallResponse)
+async def call_node_rpc_method(node_id: int, request: NodeRPCCallRequest) -> Dict[str, Any]:
+    """向指定节点转发RPC调用"""
+    if node_id not in node_websockets:
+        raise HTTPException(status_code=404, detail="Node not connected")
+
+    try:
+        result = await call_node_rpc(node_id, request.method, request.params or {})
+        return {"result": result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @app.get("/api/nodes/{node_id}", response_model=NodeResponse)
 async def get_node(node_id: int):

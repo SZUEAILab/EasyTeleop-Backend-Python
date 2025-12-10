@@ -131,3 +131,12 @@ class VRResponse(VRBase):
     info: Optional[Dict[str, Any]] = None
     created_at: str
     updated_at: str
+
+
+class RPCCallResponse(BaseModel):
+    result: Any
+
+
+class NodeRPCCallRequest(BaseModel):
+    method: str
+    params: Optional[Dict[str, Any]] = None

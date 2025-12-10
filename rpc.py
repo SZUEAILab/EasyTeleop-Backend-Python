@@ -1,8 +1,8 @@
 import asyncio
 import json
-import sqlite3
 import time
 from typing import Any, Dict
+import sqlite3
 
 from fastapi import WebSocket
 from websockets.server import WebSocketServerProtocol
@@ -99,6 +99,24 @@ async def notify_node_stop_teleop_group(node_id: int, group_id: int) -> None:
                 await websocket.send_text(json.dumps(notification))
         except Exception as exc:
             print(f"通知Node {node_id} 停止遥操组 {group_id} 失败: {exc}")
+
+
+async def call_node_rpc(node_id: int, method: str, params: Any = None, timeout: float = 30.0) -> Any:
+    """Send an RPC request to a node and return the result."""
+    if node_id not in node_websockets:
+        raise Exception("Node not connected")
+
+    websocket = node_websockets[node_id]
+    rpc_id = int(time.time() * 1000)
+    rpc_request = {
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params or {},
+        "id": rpc_id,
+    }
+
+    await websocket.send_text(json.dumps(rpc_request))
+    return await wait_for_response(websocket, node_id, rpc_id, timeout=timeout)
 
 
 async def handle_jsonrpc_request(
