@@ -1,9 +1,12 @@
 import json
+import os
 import sqlite3
 from typing import Any, Dict, List
 
-# Shared database path
-DB_PATH = "EasyTeleop.db"
+# Shared database path under a folder to allow volume mounting
+DB_DIR = os.environ.get("DB_DIR", "data")
+os.makedirs(DB_DIR, exist_ok=True)
+DB_PATH = os.path.join(DB_DIR, "EasyTeleop.db")
 
 
 def get_connection(db_path: str = DB_PATH) -> sqlite3.Connection:

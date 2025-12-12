@@ -8,6 +8,7 @@ import json
 import logging
 import sqlite3
 import time
+import os
 
 from database import DB_PATH, get_node_devices, get_node_teleop_groups, init_tables
 from rpc import (
@@ -1082,10 +1083,12 @@ async def root():
 async def startup_event():
     init_tables(DB_PATH)
     from MQTTStatusSync import MQTTStatusSync
+    mqtt_broker = os.environ.get("MQTT_BROKER", "localhost")
+    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
     sync_service = MQTTStatusSync(
-        db_path="EasyTeleop.db",
-        mqtt_broker="localhost",  # 修改为实际的MQTT服务器地址
-        mqtt_port=1883
+        db_path=DB_PATH,
+        mqtt_broker=mqtt_broker,
+        mqtt_port=mqtt_port
     )
     
     try:
