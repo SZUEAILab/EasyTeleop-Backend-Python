@@ -21,13 +21,17 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.68.0",
     "uvicorn>=0.15.0",
     "websockets>=10.0",
     "paho-mqtt>=1.6.1",
     "pydantic>=1.8.0",
+    "h5py>=3.10.0",
+    "numpy>=2.2.0,<3.0.0",
+    "opencv-python>=4.10.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

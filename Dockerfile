@@ -9,7 +9,9 @@ WORKDIR /app
 COPY . /app/
 
 # Install dependencies
-RUN pip install --no-cache-dir --upgrade pip \
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir .
 
 EXPOSE 8000

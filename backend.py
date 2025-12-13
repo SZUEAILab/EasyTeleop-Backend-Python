@@ -9,7 +9,7 @@ import logging
 import sqlite3
 import time
 import os
-
+from hdf5_api import router as hdf5_router
 from database import DB_PATH, get_node_devices, get_node_teleop_groups, init_tables
 from rpc import (
     handle_jsonrpc_request,
@@ -46,6 +46,7 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+app.include_router(hdf5_router)
 
 # 添加CORS中间件
 app.add_middleware(
